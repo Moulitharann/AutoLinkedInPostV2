@@ -1,0 +1,11 @@
+name: Actions Smoke Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm Actions can queue
+        run: echo "GitHub Actions workflow_dispatch is working."

@@ -1,0 +1,56 @@
+name: LinkedIn Scheduled Post
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 8:00 PM Asia/Kolkata is 2:30 PM UTC.
+    - cron: "30 14 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate and publish LinkedIn post
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
+          LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
+          LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
+          LINKEDIN_REDIRECT_URI: http://localhost:8000/callback
+          LINKEDIN_OAUTH_SCOPES: openid profile w_member_social
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
+          CONTENT_SOURCE_URL: ${{ secrets.CONTENT_SOURCE_URL }}
+          CONTENT_SOURCE_TYPE: auto
+          POST_HISTORY_FILE: posts_history.json
+          SCHEDULER_STATE_FILE: scheduler_state.json
+          POST_INTERVAL_DAYS: "2"
+          POST_TOPIC: software engineering, backend systems, cloud, AI, DevOps, databases, architecture
+          POST_TONE: clear, practical, senior software engineer
+          POST_AUDIENCE: software engineers and engineering leaders
+          POST_VISIBILITY: PUBLIC
+        run: python src/main.py scheduled-post
+
+      - name: Save posting state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A posts_history.json scheduler_state.json
+          git diff --cached --quiet || git commit -m "Update LinkedIn posting state"
+          git push

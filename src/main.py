@@ -434,20 +434,15 @@ Requirements:
         raise SystemExit("Gemini returned no candidates.")
 
     candidate = candidates[0]
-    content = candidate.get("content") or candidate.get("output") or candidate.get("output_text")
-
-    if isinstance(content, list):
-        text_pieces = []
-        for item in content:
-            if isinstance(item, dict) and "text" in item:
-                text_pieces.append(str(item["text"]))
-            elif isinstance(item, str):
-                text_pieces.append(item)
-        return "".join(text_pieces).strip()
-    if isinstance(content, str):
-        return content.strip()
-
-    raise SystemExit("Unexpected Gemini response format.")
+    content = candidate.get("content", {})
+    parts = content.get("parts", [])
+    
+    if parts and isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict) and "text" in part:
+                return str(part["text"]).strip()
+    
+    raise SystemExit("Unexpected Gemini response format: could not extract text from parts.")
 
 
 def publish_post(settings: Settings, text: str) -> dict[str, Any]:

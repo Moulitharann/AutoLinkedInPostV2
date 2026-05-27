@@ -419,9 +419,10 @@ Requirements:
                 ]
             }
         ],
-        "temperature": 0.7,
-        "candidateCount": 1,
-        "maxOutputTokens": 1024,
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 1024,
+        }
     }
 
     response = requests.post(url, headers=headers, json=payload, timeout=60)

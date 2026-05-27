@@ -6,6 +6,7 @@ import io
 import json
 import os
 import secrets
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -14,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
+from requests.adapters import HTTPAdapter, Retry
 import requests
 from dotenv import load_dotenv
 from openpyxl import load_workbook
@@ -47,6 +49,19 @@ class Settings:
     post_audience: str
     post_visibility: str
 
+
+def get_session() -> requests.Session:
+    """Create a requests session with retry logic."""
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 def load_settings() -> Settings:
     load_dotenv()
@@ -114,7 +129,7 @@ def exchange_code_for_token(settings: Settings, callback_url: str) -> tuple[str,
     require(settings.linkedin_client_id, "LINKEDIN_CLIENT_ID")
     require(settings.linkedin_client_secret, "LINKEDIN_CLIENT_SECRET")
 
-    response = requests.post(
+    response = get_session().post(
         LINKEDIN_TOKEN_URL,
         data={
             "grant_type": "authorization_code",
@@ -136,7 +151,7 @@ def exchange_raw_code_for_token(settings: Settings, code: str) -> tuple[str, str
     require(settings.linkedin_client_id, "LINKEDIN_CLIENT_ID")
     require(settings.linkedin_client_secret, "LINKEDIN_CLIENT_SECRET")
 
-    response = requests.post(
+    response = get_session().post(
         LINKEDIN_TOKEN_URL,
         data={
             "grant_type": "authorization_code",
@@ -243,7 +258,7 @@ def login(settings: Settings) -> None:
 
 
 def fetch_person_urn(access_token: str) -> str:
-    response = requests.get(
+    response = get_session().get(
         LINKEDIN_USERINFO_URL,
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=30,
@@ -255,7 +270,7 @@ def fetch_person_urn(access_token: str) -> str:
 
 def load_content_rows(settings: Settings) -> list[dict[str, str]]:
     source_url = download_url(require(settings.content_source_url, "CONTENT_SOURCE_URL"))
-    response = requests.get(source_url, timeout=60)
+    response = get_session().get(source_url, timeout=60)
     if response.status_code in {401, 403} and "onedrive" in source_url:
         raise SystemExit(
             "OneDrive blocked the workbook download. Open the Excel file, choose Share, "
@@ -378,7 +393,7 @@ def mark_posted(settings: Settings, key: str) -> None:
     save_history(settings, history)
 
 
-def generate_post(settings: Settings, source: dict[str, str] | None = None) -> str:
+def generate_post(settings: Settings, source: dict[str, str] | None = None) -> tuple[str, str]:
     require(settings.gemini_api_key, "GEMINI_API_KEY")
 
     source_text = ""
@@ -390,28 +405,32 @@ Description: {source["description"]}
 """
 
     prompt = f"""
-Create one professional LinkedIn post for a software engineer.
+Create a highly structured professional LinkedIn post for a software engineer and a corresponding image description.
 
 Topic area: {settings.post_topic}
 Tone: {settings.post_tone}
 Audience: {settings.post_audience}
 {source_text}
 
-EXACT FORMAT REQUIRED:
-1. Start with a strong, compelling title (one sentence)
-2. Leave one blank line
-3. Write 2-3 short, punchy paragraphs of practical content
-4. Leave one blank line
-5. End with one thoughtful question
-6. Leave one blank line
-7. Add exactly 3-5 relevant hashtags on the last line
+You must output two sections wrapped in XML-style tags:
 
-QUALITY REQUIREMENTS:
-- Keep it practical and technically credible
-- Include one specific lesson, example, or implementation insight
-- Avoid hype, fake metrics, and generic motivational filler
-- Use clear, professional language
-- Total length under 1,200 characters
+<POST_TEXT>
+A strong, compelling headline.
+
+2-3 short, punchy paragraphs of practical technical content. Include one specific lesson or insight. 
+
+A thoughtful question to encourage engagement.
+
+Exactly 3-5 relevant hashtags.
+</POST_TEXT>
+
+<IMAGE_PROMPT>
+A detailed, professional visual description for an AI image generator (Stable Diffusion). 
+It should be a "Professional tech illustration" or "Clean 3D isometric tech art" that reflects the post topic. 
+Avoid text inside the image.
+</IMAGE_PROMPT>
+
+Constraint: Post text must be under 1,200 characters. No hype or generic motivational filler.
 """
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
@@ -433,7 +452,7 @@ QUALITY REQUIREMENTS:
         }
     }
 
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    response = get_session().post(url, headers=headers, json=payload, timeout=60)
     response.raise_for_status()
     data = response.json()
 
@@ -446,11 +465,27 @@ QUALITY REQUIREMENTS:
     parts = content.get("parts", [])
     
     if parts and isinstance(parts, list):
-        for part in parts:
-            if isinstance(part, dict) and "text" in part:
-                return str(part["text"]).strip()
-    
-    raise SystemExit("Unexpected Gemini response format: could not extract text from parts.")
+        full_text = "".join([str(part.get("text", "")) for part in parts]).strip()
+        
+        post_text = ""
+        image_prompt = ""
+        
+        post_match = re.search(r"<POST_TEXT>(.*?)</POST_TEXT>", full_text, re.DOTALL | re.IGNORECASE)
+        image_match = re.search(r"<IMAGE_PROMPT>(.*?)</IMAGE_PROMPT>", full_text, re.DOTALL | re.IGNORECASE)
+        
+        if post_match:
+            post_text = post_match.group(1).strip()
+        if image_match:
+            image_prompt = image_match.group(1).strip()
+            
+        if not post_text:
+            post_text = full_text # Fallback if tags are missing
+        if not image_prompt:
+            image_prompt = f"Professional tech illustration: {settings.post_topic}"
+            
+        return post_text, image_prompt
+
+    raise SystemExit("Unexpected Gemini response format.")
 
 
 def generate_image(settings: Settings, prompt: str) -> bytes | None:
@@ -463,7 +498,7 @@ def generate_image(settings: Settings, prompt: str) -> bytes | None:
         headers = {"Authorization": f"Bearer {settings.hugging_face_api_key}"}
         payload = {"inputs": prompt}
         
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = get_session().post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         
         return response.content
@@ -501,7 +536,7 @@ def upload_image_to_linkedin(settings: Settings, image_data: bytes) -> str | Non
             }
         }
         
-        register_response = requests.post(
+        register_response = get_session().post(
             register_url, headers=register_headers, json=register_payload, timeout=30
         )
         register_response.raise_for_status()
@@ -511,7 +546,7 @@ def upload_image_to_linkedin(settings: Settings, image_data: bytes) -> str | Non
         asset_urn = register_data["value"]["asset"]
         
         # Upload the image
-        upload_response = requests.put(upload_url, data=image_data, timeout=30)
+        upload_response = get_session().put(upload_url, data=image_data, timeout=30)
         upload_response.raise_for_status()
         
         return asset_urn
@@ -545,7 +580,7 @@ def publish_post(settings: Settings, text: str, image_urn: str | None = None) ->
             }
         }
 
-    response = requests.post(
+    response = get_session().post(
         LINKEDIN_POSTS_URL,
         headers={
             "Authorization": f"Bearer {access_token}",
@@ -565,8 +600,12 @@ def preview(settings: Settings) -> None:
     if settings.content_source_url and "PASTE_" not in settings.content_source_url:
         source, _ = next_content_row(settings)
         print(f"Source title: {source['title']}")
-        print()
-    print(generate_post(settings, source))
+
+    text, img_prompt = generate_post(settings, source)
+    print("--- POST PREVIEW ---")
+    print(text)
+    print("\n--- IMAGE PROMPT PREVIEW ---")
+    print(img_prompt)
 
 
 def post(settings: Settings) -> None:
@@ -574,12 +613,10 @@ def post(settings: Settings) -> None:
     source_key = ""
     if settings.content_source_url and "PASTE_" not in settings.content_source_url:
         source, source_key = next_content_row(settings)
-    text = generate_post(settings, source)
+    text, image_prompt = generate_post(settings, source)
     
-    # Generate image based on the post content
     image_urn = None
     if settings.hugging_face_api_key:
-        image_prompt = f"Professional tech illustration for LinkedIn: {text[:100]}"
         image_data = generate_image(settings, image_prompt)
         if image_data:
             image_urn = upload_image_to_linkedin(settings, image_data)

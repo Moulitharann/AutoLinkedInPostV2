@@ -311,8 +311,15 @@ def download_url(source_url: str) -> str:
 def normalize_rows(rows: Any) -> list[dict[str, str]]:
     normalized = []
     for row in rows:
-        title = str(row.get("title", "")).strip()
-        description = str(row.get("description", "")).strip()
+        # Handle both lowercase and capitalized column names
+        title_key = next((k for k in row.keys() if k.lower() == "title"), None)
+        desc_key = next((k for k in row.keys() if k.lower() == "description"), None)
+        
+        if not title_key or not desc_key:
+            continue
+            
+        title = str(row.get(title_key, "")).strip()
+        description = str(row.get(desc_key, "")).strip()
         if title and description:
             normalized.append({"title": title, "description": description})
     return normalized

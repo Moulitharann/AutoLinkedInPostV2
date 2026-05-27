@@ -415,13 +415,11 @@ Audience: {settings.post_audience}
 You must output two sections wrapped in XML-style tags:
 
 <POST_TEXT>
-A strong, compelling headline.
+Title: [A strong, compelling headline]
 
-2-3 short, punchy paragraphs of practical technical content. Include one specific lesson or insight. 
+Description: [2-3 short, punchy paragraphs of practical technical content. Include one specific lesson or insight. End with a thoughtful question to encourage engagement.]
 
-A thoughtful question to encourage engagement.
-
-Exactly 3-5 relevant hashtags.
+Hashtags: [Exactly 3-5 relevant hashtags]
 </POST_TEXT>
 
 <IMAGE_PROMPT>

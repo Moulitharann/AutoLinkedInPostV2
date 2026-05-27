@@ -30,6 +30,7 @@ LINKEDIN_VERSION = "202605"
 class Settings:
     gemini_api_key: str
     gemini_model: str
+    hugging_face_api_key: str
     linkedin_client_id: str
     linkedin_client_secret: str
     linkedin_redirect_uri: str
@@ -52,6 +53,7 @@ def load_settings() -> Settings:
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
+        hugging_face_api_key=os.getenv("HUGGING_FACE_API_KEY", ""),
         linkedin_client_id=os.getenv("LINKEDIN_CLIENT_ID", ""),
         linkedin_client_secret=os.getenv("LINKEDIN_CLIENT_SECRET", ""),
         linkedin_redirect_uri=os.getenv("LINKEDIN_REDIRECT_URI", "http://localhost:8000/callback"),
@@ -388,22 +390,28 @@ Description: {source["description"]}
 """
 
     prompt = f"""
-Create one LinkedIn post for a software engineer.
+Create one professional LinkedIn post for a software engineer.
 
 Topic area: {settings.post_topic}
 Tone: {settings.post_tone}
 Audience: {settings.post_audience}
 {source_text}
 
-Requirements:
-- Start with a strong title on the first line.
-- Add a blank line after the title.
-- Keep it practical and technically credible.
-- Include one short lesson, example, or implementation insight.
-- Avoid hype, fake metrics, and generic motivational filler.
-- End with one thoughtful question.
-- Add 3 to 5 relevant hashtags.
-- Keep it under 1,200 characters.
+EXACT FORMAT REQUIRED:
+1. Start with a strong, compelling title (one sentence)
+2. Leave one blank line
+3. Write 2-3 short, punchy paragraphs of practical content
+4. Leave one blank line
+5. End with one thoughtful question
+6. Leave one blank line
+7. Add exactly 3-5 relevant hashtags on the last line
+
+QUALITY REQUIREMENTS:
+- Keep it practical and technically credible
+- Include one specific lesson, example, or implementation insight
+- Avoid hype, fake metrics, and generic motivational filler
+- Use clear, professional language
+- Total length under 1,200 characters
 """
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
@@ -445,7 +453,74 @@ Requirements:
     raise SystemExit("Unexpected Gemini response format: could not extract text from parts.")
 
 
-def publish_post(settings: Settings, text: str) -> dict[str, Any]:
+def generate_image(settings: Settings, prompt: str) -> bytes | None:
+    """Generate an image using Hugging Face Stable Diffusion API."""
+    if not settings.hugging_face_api_key:
+        return None
+    
+    try:
+        url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-3.5-large"
+        headers = {"Authorization": f"Bearer {settings.hugging_face_api_key}"}
+        payload = {"inputs": prompt}
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+        
+        return response.content
+    except Exception as e:
+        print(f"Warning: Image generation failed: {e}", file=sys.stderr)
+        return None
+
+
+def upload_image_to_linkedin(settings: Settings, image_data: bytes) -> str | None:
+    """Upload an image to LinkedIn and return the asset URN."""
+    if not image_data:
+        return None
+    
+    try:
+        access_token = settings.linkedin_access_token
+        person_urn = settings.linkedin_person_urn
+        
+        # Register the image upload
+        register_url = "https://api.linkedin.com/v2/assets?action=registerUpload"
+        register_headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "LinkedIn-Version": LINKEDIN_VERSION,
+        }
+        register_payload = {
+            "registerUploadRequest": {
+                "owner": person_urn,
+                "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
+                "serviceRelationships": [
+                    {
+                        "relationshipType": "OWNER",
+                        "identifier": "urn:li:userGeneratedContent",
+                    }
+                ],
+            }
+        }
+        
+        register_response = requests.post(
+            register_url, headers=register_headers, json=register_payload, timeout=30
+        )
+        register_response.raise_for_status()
+        register_data = register_response.json()
+        
+        upload_url = register_data["value"]["uploadMechanism"]["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]["uploadUrl"]
+        asset_urn = register_data["value"]["asset"]
+        
+        # Upload the image
+        upload_response = requests.put(upload_url, data=image_data, timeout=30)
+        upload_response.raise_for_status()
+        
+        return asset_urn
+    except Exception as e:
+        print(f"Warning: Image upload failed: {e}", file=sys.stderr)
+        return None
+
+
+def publish_post(settings: Settings, text: str, image_urn: str | None = None) -> dict[str, Any]:
     access_token = require(settings.linkedin_access_token, "LINKEDIN_ACCESS_TOKEN")
     author = require(settings.linkedin_person_urn, "LINKEDIN_PERSON_URN")
 
@@ -461,6 +536,14 @@ def publish_post(settings: Settings, text: str) -> dict[str, Any]:
         "lifecycleState": "PUBLISHED",
         "isReshareDisabledByAuthor": False,
     }
+    
+    # Add image if available
+    if image_urn:
+        payload["content"] = {
+            "media": {
+                "id": image_urn,
+            }
+        }
 
     response = requests.post(
         LINKEDIN_POSTS_URL,
@@ -492,7 +575,16 @@ def post(settings: Settings) -> None:
     if settings.content_source_url and "PASTE_" not in settings.content_source_url:
         source, source_key = next_content_row(settings)
     text = generate_post(settings, source)
-    result = publish_post(settings, text)
+    
+    # Generate image based on the post content
+    image_urn = None
+    if settings.hugging_face_api_key:
+        image_prompt = f"Professional tech illustration for LinkedIn: {text[:100]}"
+        image_data = generate_image(settings, image_prompt)
+        if image_data:
+            image_urn = upload_image_to_linkedin(settings, image_data)
+    
+    result = publish_post(settings, text, image_urn)
     if source_key:
         mark_posted(settings, source_key)
     print(text)

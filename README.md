@@ -5,6 +5,7 @@ Generate and publish one technical LinkedIn post every 2 days at 8:00 PM.
 This project uses:
 
 - Google Gemini to generate a software-engineering-focused title and post.
+- Hugging Face Stable Diffusion to generate professional images for posts.
 - An online Excel, CSV, or Google Sheet with `title` and `description` columns.
 - LinkedIn OAuth 2.0 to get a user access token.
 - LinkedIn Posts API to publish to your personal profile.
@@ -40,6 +41,7 @@ Copy-Item .env.example .env
 Edit `.env` and add:
 
 - `GEMINI_API_KEY`
+- `HUGGING_FACE_API_KEY`
 - `LINKEDIN_CLIENT_ID`
 - `LINKEDIN_CLIENT_SECRET`
 - `CONTENT_SOURCE_URL`
@@ -112,6 +114,7 @@ Push the project to a GitHub repository, then add these repository secrets in Gi
 
 ```text
 GEMINI_API_KEY
+HUGGING_FACE_API_KEY
 LINKEDIN_CLIENT_ID
 LINKEDIN_CLIENT_SECRET
 LINKEDIN_ACCESS_TOKEN

@@ -634,9 +634,10 @@ def scheduled_post(settings: Settings) -> None:
     state = load_scheduler_state(settings)
     last_posted_on = parse_date(state.get("last_posted_on", ""))
 
-    if last_posted_on and (today - last_posted_on).days < settings.post_interval_days:
-        print(f"Skipping. Last successful post was on {last_posted_on.isoformat()}.")
-        return
+    # Temporarily disabled interval check for testing/checking
+    # if last_posted_on and (today - last_posted_on).days < settings.post_interval_days:
+    #     print(f"Skipping. Last successful post was on {last_posted_on.isoformat()}.")
+    #     return
 
     post(settings)
     state["last_posted_on"] = today.isoformat()

@@ -17,7 +17,6 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 from openpyxl import load_workbook
-from openai import OpenAI
 
 
 LINKEDIN_AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization"
@@ -29,8 +28,8 @@ LINKEDIN_VERSION = "202605"
 
 @dataclass(frozen=True)
 class Settings:
-    openai_api_key: str
-    openai_model: str
+    gemini_api_key: str
+    gemini_model: str
     linkedin_client_id: str
     linkedin_client_secret: str
     linkedin_redirect_uri: str
@@ -51,8 +50,8 @@ class Settings:
 def load_settings() -> Settings:
     load_dotenv()
     return Settings(
-        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
         linkedin_client_id=os.getenv("LINKEDIN_CLIENT_ID", ""),
         linkedin_client_secret=os.getenv("LINKEDIN_CLIENT_SECRET", ""),
         linkedin_redirect_uri=os.getenv("LINKEDIN_REDIRECT_URI", "http://localhost:8000/callback"),
@@ -378,8 +377,7 @@ def mark_posted(settings: Settings, key: str) -> None:
 
 
 def generate_post(settings: Settings, source: dict[str, str] | None = None) -> str:
-    require(settings.openai_api_key, "OPENAI_API_KEY")
-    client = OpenAI(api_key=settings.openai_api_key)
+    require(settings.gemini_api_key, "GEMINI_API_KEY")
 
     source_text = ""
     if source:
@@ -408,17 +406,47 @@ Requirements:
 - Keep it under 1,200 characters.
 """
 
-    response = client.responses.create(
-        model=settings.openai_model,
-        input=[
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": settings.gemini_api_key,
+    }
+    payload = {
+        "contents": [
             {
-                "role": "system",
-                "content": "You write authentic technical LinkedIn posts for a working software engineer.",
-            },
-            {"role": "user", "content": prompt.strip()},
+                "parts": [
+                    {"text": prompt.strip()}
+                ]
+            }
         ],
-    )
-    return response.output_text.strip()
+        "temperature": 0.7,
+        "candidateCount": 1,
+        "maxOutputTokens": 1024,
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise SystemExit("Gemini returned no candidates.")
+
+    candidate = candidates[0]
+    content = candidate.get("content") or candidate.get("output") or candidate.get("output_text")
+
+    if isinstance(content, list):
+        text_pieces = []
+        for item in content:
+            if isinstance(item, dict) and "text" in item:
+                text_pieces.append(str(item["text"]))
+            elif isinstance(item, str):
+                text_pieces.append(item)
+        return "".join(text_pieces).strip()
+    if isinstance(content, str):
+        return content.strip()
+
+    raise SystemExit("Unexpected Gemini response format.")
 
 
 def publish_post(settings: Settings, text: str) -> dict[str, Any]:

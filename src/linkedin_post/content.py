@@ -14,6 +14,10 @@ from .http_utils import get_session
 from .settings import Settings, require
 
 
+class AllRowsPostedError(Exception):
+    """Raised when the content source has no unused rows left."""
+
+
 def download_url(source_url: str) -> str:
     parsed = urlparse(source_url)
     if parsed.netloc.endswith("docs.google.com") and "/spreadsheets/d/" in parsed.path:
@@ -126,7 +130,7 @@ def next_content_row(settings: Settings) -> tuple[dict[str, str], str]:
         if key not in posted:
             return row, key
 
-    raise SystemExit("All rows from the source have already been posted.")
+    raise AllRowsPostedError("All rows from the source have already been posted.")
 
 
 def mark_posted(settings: Settings, key: str) -> None:

@@ -2,7 +2,13 @@ import argparse
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from src.linkedin_post.content import mark_posted, next_content_row, load_scheduler_state, save_scheduler_state
+from src.linkedin_post.content import (
+    AllRowsPostedError,
+    mark_posted,
+    next_content_row,
+    load_scheduler_state,
+    save_scheduler_state,
+)
 from src.linkedin_post.gemini_api import generate_post
 from src.linkedin_post.image_api import generate_image, upload_image_to_linkedin
 from src.linkedin_post.linkedin_api import build_auth_url, exchange_code_for_token, login, publish_post
@@ -76,7 +82,12 @@ def scheduled_post(settings):
         print(f"Skipping. Last successful post was on {last_posted_on.isoformat()}.")
         return
 
-    post(settings)
+    try:
+        post(settings)
+    except AllRowsPostedError as exc:
+        print(f"Skipping. {exc}")
+        return
+
     state["last_posted_on"] = today.isoformat()
     save_scheduler_state(settings, state)
 

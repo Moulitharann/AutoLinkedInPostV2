@@ -52,7 +52,7 @@
           POST_TONE: clear, practical, senior software engineer
           POST_AUDIENCE: software engineers and engineering leaders
           POST_VISIBILITY: PUBLIC
-        run: python src/main.py scheduled-post
+        run: python -m src.main scheduled-post
 
       - name: Save posting state
         run: |

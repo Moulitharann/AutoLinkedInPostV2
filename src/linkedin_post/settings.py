@@ -8,8 +8,7 @@ from dotenv import load_dotenv
 class Settings:
     gemini_api_key: str
     gemini_model: str
-    hugging_face_api_key: str
-    hugging_face_model: str
+    gemini_image_model: str
     linkedin_client_id: str
     linkedin_client_secret: str
     linkedin_redirect_uri: str
@@ -32,8 +31,7 @@ def load_settings() -> Settings:
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
-        hugging_face_api_key=os.getenv("HUGGING_FACE_API_KEY", ""),
-        hugging_face_model=os.getenv("HUGGING_FACE_MODEL", "stabilityai/stable-diffusion-xl-base-1.0"),
+        gemini_image_model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
         linkedin_client_id=os.getenv("LINKEDIN_CLIENT_ID", ""),
         linkedin_client_secret=os.getenv("LINKEDIN_CLIENT_SECRET", ""),
         linkedin_redirect_uri=os.getenv("LINKEDIN_REDIRECT_URI", "http://localhost:8000/callback"),

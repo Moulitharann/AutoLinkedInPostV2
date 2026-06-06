@@ -1,13 +1,13 @@
 import io
+import base64
 import re
 import sys
 from pathlib import Path
 
-from huggingface_hub import InferenceClient
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .http_utils import get_session
-from .settings import Settings
+from .settings import Settings, require
 
 
 def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
@@ -130,13 +130,48 @@ def compose_linkedin_image(base_image: Image.Image, post_text: str) -> bytes:
 
 
 def generate_image(settings: Settings, prompt: str, post_text: str = "") -> bytes | None:
-    """Generate an image using Hugging Face serverless inference."""
-    if not settings.hugging_face_api_key:
-        return None
+    """Generate an image using Gemini image generation."""
+    require(settings.gemini_api_key, "GEMINI_API_KEY")
 
     try:
-        client = InferenceClient(api_key=settings.hugging_face_api_key)
-        image = client.text_to_image(prompt=prompt, model=settings.hugging_face_model)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_image_model}:generateContent"
+        response = get_session().post(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "X-goog-api-key": settings.gemini_api_key,
+            },
+            json={
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "responseModalities": ["IMAGE"]
+                },
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        image_data = None
+        for candidate in data.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                inline_data = part.get("inlineData") or part.get("inline_data")
+                if inline_data and inline_data.get("data"):
+                    image_data = base64.b64decode(inline_data["data"])
+                    break
+            if image_data:
+                break
+
+        if not image_data:
+            raise RuntimeError("Gemini returned no image data.")
+
+        image = Image.open(io.BytesIO(image_data))
         if post_text:
             return compose_linkedin_image(image, post_text)
 

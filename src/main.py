@@ -30,8 +30,8 @@ def preview(settings):
 
 
 def prepare_image(settings, image_prompt, post_text):
-    if not settings.hugging_face_api_key:
-        raise SystemExit("Image generation is required before publishing. Missing HUGGING_FACE_API_KEY.")
+    if not settings.gemini_api_key:
+        raise SystemExit("Image generation is required before publishing. Missing GEMINI_API_KEY.")
 
     image_data = generate_image(settings, image_prompt, post_text)
     if not image_data:

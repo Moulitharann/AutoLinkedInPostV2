@@ -16,6 +16,10 @@ from src.linkedin_post.settings import load_settings
 from src.linkedin_post.utils import parse_date
 
 
+class ImagePreparationError(Exception):
+    """Raised when image generation or upload prevents publishing."""
+
+
 def preview(settings):
     source = None
     if settings.content_source_url and "PASTE_" not in settings.content_source_url:
@@ -31,15 +35,15 @@ def preview(settings):
 
 def prepare_image(settings, image_prompt, post_text):
     if not settings.gemini_api_key:
-        raise SystemExit("Image generation is required before publishing. Missing GEMINI_API_KEY.")
+        raise ImagePreparationError("Image generation is required before publishing. Missing GEMINI_API_KEY.")
 
     image_data = generate_image(settings, image_prompt, post_text)
     if not image_data:
-        raise SystemExit("Image generation failed. Nothing was published.")
+        raise ImagePreparationError("Image generation failed. Nothing was published.")
 
     image_urn = upload_image_to_linkedin(settings, image_data)
     if not image_urn:
-        raise SystemExit("Image upload to LinkedIn failed. Nothing was published.")
+        raise ImagePreparationError("Image upload to LinkedIn failed. Nothing was published.")
 
     return image_urn
 
@@ -87,6 +91,9 @@ def scheduled_post(settings):
     except AllRowsPostedError as exc:
         print(f"Skipping. {exc}")
         return
+    except ImagePreparationError as exc:
+        print(f"Skipping. {exc}")
+        return
 
     state["last_posted_on"] = today.isoformat()
     save_scheduler_state(settings, state)
@@ -107,22 +114,25 @@ def main():
     args = parser.parse_args()
     settings = load_settings()
 
-    if args.command == "auth-url":
-        print(build_auth_url(settings))
-    elif args.command == "login":
-        login(settings)
-    elif args.command == "exchange":
-        access_token, person_urn = exchange_code_for_token(settings, args.callback_url)
-        print(f"LINKEDIN_ACCESS_TOKEN={access_token}")
-        print(f"LINKEDIN_PERSON_URN={person_urn}")
-    elif args.command == "preview":
-        preview(settings)
-    elif args.command == "test-image":
-        test_image(settings)
-    elif args.command == "post":
-        post(settings)
-    elif args.command == "scheduled-post":
-        scheduled_post(settings)
+    try:
+        if args.command == "auth-url":
+            print(build_auth_url(settings))
+        elif args.command == "login":
+            login(settings)
+        elif args.command == "exchange":
+            access_token, person_urn = exchange_code_for_token(settings, args.callback_url)
+            print(f"LINKEDIN_ACCESS_TOKEN={access_token}")
+            print(f"LINKEDIN_PERSON_URN={person_urn}")
+        elif args.command == "preview":
+            preview(settings)
+        elif args.command == "test-image":
+            test_image(settings)
+        elif args.command == "post":
+            post(settings)
+        elif args.command == "scheduled-post":
+            scheduled_post(settings)
+    except ImagePreparationError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

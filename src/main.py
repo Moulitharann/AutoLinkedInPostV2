@@ -33,17 +33,28 @@ def preview(settings):
     print(image_prompt)
 
 
-def prepare_image(settings, image_prompt, post_text):
+def prepare_image(settings, image_prompt, post_text, require_image=None):
+    require_image = settings.post_require_image if require_image is None else require_image
+
     if not settings.gemini_api_key:
-        raise ImagePreparationError("Image generation is required before publishing. Missing GEMINI_API_KEY.")
+        if require_image:
+            raise ImagePreparationError("Image generation is required before publishing. Missing GEMINI_API_KEY.")
+        print("Image generation skipped. Missing GEMINI_API_KEY; publishing text-only.")
+        return None
 
     image_data = generate_image(settings, image_prompt, post_text)
     if not image_data:
-        raise ImagePreparationError("Image generation failed. Nothing was published.")
+        if require_image:
+            raise ImagePreparationError("Image generation failed. Nothing was published.")
+        print("Image generation failed. Publishing text-only.")
+        return None
 
     image_urn = upload_image_to_linkedin(settings, image_data)
     if not image_urn:
-        raise ImagePreparationError("Image upload to LinkedIn failed. Nothing was published.")
+        if require_image:
+            raise ImagePreparationError("Image upload to LinkedIn failed. Nothing was published.")
+        print("Image upload to LinkedIn failed. Publishing text-only.")
+        return None
 
     return image_urn
 
@@ -54,7 +65,7 @@ def test_image(settings):
         source, _ = next_content_row(settings)
 
     text, image_prompt = generate_post(settings, source)
-    image_urn = prepare_image(settings, image_prompt, text)
+    image_urn = prepare_image(settings, image_prompt, text, require_image=True)
     print("Image generation and LinkedIn upload test passed.")
     print(f"Image URN: {image_urn}")
 

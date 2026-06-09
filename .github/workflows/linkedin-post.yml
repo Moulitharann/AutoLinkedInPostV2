@@ -35,7 +35,7 @@
       - name: Generate and publish LinkedIn post
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-flash-latest
+          GEMINI_MODEL: gemini-2.5-flash
           GEMINI_IMAGE_MODEL: gemini-2.5-flash-image
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
@@ -52,6 +52,7 @@
           POST_TONE: clear, practical, senior software engineer
           POST_AUDIENCE: software engineers and engineering leaders
           POST_VISIBILITY: PUBLIC
+          POST_REQUIRE_IMAGE: "false"
         run: python -m src.main scheduled-post
 
       - name: Save posting state

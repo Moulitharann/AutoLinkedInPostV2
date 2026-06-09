@@ -2,12 +2,15 @@ import io
 import base64
 import re
 import sys
+import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .http_utils import get_session
 from .settings import Settings, require
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
@@ -129,33 +132,82 @@ def compose_linkedin_image(base_image: Image.Image, post_text: str) -> bytes:
     return output.getvalue()
 
 
+def fallback_base_image() -> Image.Image:
+    canvas = Image.new("RGB", (1024, 1024), "#eef6ff")
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((120, 150, 904, 330), radius=34, fill="#ffffff", outline="#93c5fd", width=4)
+    draw.rounded_rectangle((170, 205, 500, 238), radius=10, fill="#bfdbfe")
+    draw.rounded_rectangle((170, 260, 790, 288), radius=10, fill="#dbeafe")
+
+    stages = [
+        ((155, 470, 315, 590), "#dbeafe"),
+        ((432, 470, 592, 590), "#dcfce7"),
+        ((709, 470, 869, 590), "#e0f2fe"),
+    ]
+    for bounds, fill in stages:
+        draw.rounded_rectangle(bounds, radius=28, fill=fill, outline="#2563eb", width=4)
+
+    draw.line((330, 530, 417, 530), fill="#2563eb", width=8)
+    draw.line((607, 530, 694, 530), fill="#2563eb", width=8)
+    draw.polygon([(405, 512), (430, 530), (405, 548)], fill="#2563eb")
+    draw.polygon([(682, 512), (707, 530), (682, 548)], fill="#2563eb")
+
+    draw.rounded_rectangle((205, 700, 819, 820), radius=30, fill="#ffffff", outline="#86efac", width=4)
+    draw.rounded_rectangle((255, 748, 430, 778), radius=10, fill="#bbf7d0")
+    draw.rounded_rectangle((470, 748, 770, 778), radius=10, fill="#d1fae5")
+
+    return canvas
+
+
+def fallback_image_bytes(post_text: str = "") -> bytes:
+    base_image = fallback_base_image()
+    if post_text:
+        return compose_linkedin_image(base_image, post_text)
+
+    output = io.BytesIO()
+    base_image.save(output, format="PNG")
+    return output.getvalue()
+
+
 def generate_image(settings: Settings, prompt: str, post_text: str = "") -> bytes | None:
     """Generate an image using Gemini image generation."""
     require(settings.gemini_api_key, "GEMINI_API_KEY")
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_image_model}:generateContent"
-        response = get_session().post(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "X-goog-api-key": settings.gemini_api_key,
+        headers = {
+            "Content-Type": "application/json",
+            "X-goog-api-key": settings.gemini_api_key,
+        }
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "responseModalities": ["IMAGE"]
             },
-            json={
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": prompt}
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "responseModalities": ["IMAGE"]
-                },
-            },
-            timeout=120,
-        )
-        response.raise_for_status()
+        }
+
+        response = None
+        for attempt in range(1, 4):
+            response = get_session().post(url, headers=headers, json=payload, timeout=120)
+            if response.ok:
+                break
+            if response.status_code not in RETRYABLE_STATUS_CODES or attempt == 3:
+                response.raise_for_status()
+
+            wait_seconds = attempt * 10
+            print(f"Gemini image model is temporarily unavailable. Retrying in {wait_seconds}s...")
+            time.sleep(wait_seconds)
+
+        if response is None:
+            raise RuntimeError("Gemini image generation did not return a response.")
+
         data = response.json()
 
         image_data = None
@@ -180,7 +232,8 @@ def generate_image(settings: Settings, prompt: str, post_text: str = "") -> byte
         return output.getvalue()
     except Exception as e:
         print(f"Warning: Image generation failed: {e}", file=sys.stderr)
-        return None
+        print("Using local fallback image.")
+        return fallback_image_bytes(post_text)
 
 
 def upload_image_to_linkedin(settings: Settings, image_data: bytes) -> str | None:

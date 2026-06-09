@@ -24,13 +24,14 @@ class Settings:
     post_tone: str
     post_audience: str
     post_visibility: str
+    post_require_image: bool
 
 
 def load_settings() -> Settings:
     load_dotenv()
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         gemini_image_model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
         linkedin_client_id=os.getenv("LINKEDIN_CLIENT_ID", ""),
         linkedin_client_secret=os.getenv("LINKEDIN_CLIENT_SECRET", ""),
@@ -47,6 +48,7 @@ def load_settings() -> Settings:
         post_tone=os.getenv("POST_TONE", "clear, practical, senior software engineer"),
         post_audience=os.getenv("POST_AUDIENCE", "software engineers"),
         post_visibility=os.getenv("POST_VISIBILITY", "PUBLIC"),
+        post_require_image=os.getenv("POST_REQUIRE_IMAGE", "false").lower() in {"1", "true", "yes", "on"},
     )
 
 

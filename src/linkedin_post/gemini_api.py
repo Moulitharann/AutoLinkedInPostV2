@@ -1,8 +1,12 @@
 import re
+import time
 from typing import Any
 
 from .http_utils import get_session
 from .settings import Settings, require
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+TEXT_MODEL_FALLBACK = "gemini-2.5-flash-lite"
 
 
 def extract_section(text: str, tag: str) -> str:
@@ -32,6 +36,59 @@ def normalize_hashtags(hashtags: str, settings: Settings) -> str:
     return " ".join(
         f"#{token.lstrip('#')}" for token in re.split(r"\s+", hashtags.replace("\n", " ").strip()) if token
     )
+
+
+def post_generate_content(settings: Settings, prompt: str):
+    models = [settings.gemini_model]
+    if settings.gemini_model != TEXT_MODEL_FALLBACK:
+        models.append(TEXT_MODEL_FALLBACK)
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": settings.gemini_api_key,
+    }
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt.strip()}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 2048,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            },
+        }
+    }
+
+    last_error = ""
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(1, 4):
+            response = get_session().post(url, headers=headers, json=payload, timeout=60)
+            if response.ok:
+                if model != settings.gemini_model:
+                    print(f"Gemini model {settings.gemini_model} was busy. Used fallback model {model}.")
+                return response
+
+            try:
+                error_message = response.json().get("error", {}).get("message", response.text)
+            except ValueError:
+                error_message = response.text
+
+            last_error = f"Gemini post generation failed ({response.status_code}): {error_message}"
+            if response.status_code not in RETRYABLE_STATUS_CODES:
+                raise SystemExit(last_error)
+
+            if attempt < 3:
+                wait_seconds = attempt * 5
+                print(f"Gemini model {model} is temporarily unavailable. Retrying in {wait_seconds}s...")
+                time.sleep(wait_seconds)
+
+    raise SystemExit(last_error)
 
 
 def generate_post(settings: Settings, source: dict[str, str] | None = None) -> tuple[str, str]:
@@ -80,27 +137,7 @@ Prefer a professional LinkedIn-ready composition with clear workflow elements, r
 Constraint: Post text must be under 900 characters. No hype, fluff, or generic motivational filler.
 """
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
-    headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": settings.gemini_api_key,
-    }
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt.strip()}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2048,
-        }
-    }
-
-    response = get_session().post(url, headers=headers, json=payload, timeout=60)
-    response.raise_for_status()
+    response = post_generate_content(settings, prompt)
     data = response.json()
 
     candidates = data.get("candidates", [])

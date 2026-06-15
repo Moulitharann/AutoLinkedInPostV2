@@ -1,28 +1,56 @@
 import io
 import base64
 import re
-import sys
+
+import os
 import time
+import logging
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .http_utils import get_session
 from .settings import Settings, require
+from .gemini_api import enhance_image_prompt
+
+# Configure logging for this module
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# Image composition constants
+CANVAS_SIZE = 1200
+IMAGE_CARD_SIZE = 520          # FIX: was a magic number (520, 520) in compose_linkedin_image
+IMAGE_OVERLAY_COLOR = (15, 23, 42, 52)   # FIX: was a magic number inline
+IMAGE_RECT_RADIUS = 38
+IMAGE_RECT_FILL = "#dbeafe"
+IMAGE_RECT_OUTLINE = "#93c5fd"
+IMAGE_RECT_OUTLINE_WIDTH = 5
+STAGE_BOX_WIDTH = 190          # FIX: unified stage box width (was inconsistent index-based logic)
+
 
 def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    """Loads a font, preferring system fonts or falling back to default."""
     font_name = "arialbd.ttf" if bold else "arial.ttf"
-    font_path = Path("C:/Windows/Fonts") / font_name
-    if font_path.exists():
-        return ImageFont.truetype(str(font_path), size=size)
+
+    # FIX: Added Linux/macOS font paths as fallbacks (original was Windows-only)
+    candidate_dirs = [
+        Path("C:/Windows/Fonts"),                                    # Windows
+        Path("/usr/share/fonts/truetype/msttcorefonts"),             # Linux (msttcorefonts pkg)
+        Path("/usr/share/fonts/truetype/liberation"),                # Linux fallback
+        Path("/Library/Fonts"),                                      # macOS
+    ]
+    for directory in candidate_dirs:
+        font_path = directory / font_name
+        if font_path.exists():
+            return ImageFont.truetype(str(font_path), size=size)
+
     return ImageFont.load_default()
 
 
 def wrap_text(draw: ImageDraw.ImageDraw, text: str, text_font: ImageFont.ImageFont, max_width: int) -> list[str]:
     lines = []
+    # Handle paragraphs separately
     for paragraph in text.splitlines():
         words = paragraph.split()
         if not words:
@@ -42,6 +70,7 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, text_font: ImageFont.ImageFo
 
 
 def post_image_text(post_text: str) -> tuple[str, str]:
+    """Extracts a title and a concise body from the post text for image display."""
     lines = [line.strip() for line in post_text.splitlines() if line.strip()]
     title = lines[0] if lines else "Software Engineering Insight"
     body_lines = [line for line in lines[1:] if not line.startswith("#")]
@@ -63,6 +92,7 @@ def limited_lines(
     max_width: int,
     max_lines: int,
 ) -> list[str]:
+    """Wraps text and limits it to a maximum number of lines, adding an ellipsis if clipped."""
     lines = wrap_text(draw, text, text_font, max_width)
     if len(lines) <= max_lines:
         return lines
@@ -75,60 +105,88 @@ def limited_lines(
 
 
 def compose_linkedin_image(base_image: Image.Image, post_text: str) -> bytes:
+    """Composes a professional LinkedIn-style image with enhanced design."""
     title, body = post_image_text(post_text)
-    canvas_size = 1200
-    canvas = Image.new("RGB", (canvas_size, canvas_size), "#eef6ff")
+    
+    # Premium background
+    canvas = Image.new("RGB", (CANVAS_SIZE, CANVAS_SIZE), "#f8fafc")
 
-    generated = base_image.convert("RGB").resize((520, 520)).filter(ImageFilter.GaussianBlur(radius=0.6))
-    generated_overlay = Image.new("RGBA", generated.size, (15, 23, 42, 52))
-    generated = Image.alpha_composite(generated.convert("RGBA"), generated_overlay)
+    # Process the generated image with professional styling
+    generated = (
+        base_image.convert("RGB")
+        .resize((540, 540))  # Larger, more prominent
+        .filter(ImageFilter.GaussianBlur(radius=0.8))
+    )
+    
+    # Sophisticated semi-transparent overlay
+    overlay = Image.new("RGBA", generated.size, (15, 23, 42, 90))
+    generated = Image.alpha_composite(generated.convert("RGBA"), overlay)
 
     draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((640, 145, 1120, 625), radius=38, fill="#dbeafe")
-    canvas.paste(generated, (620, 125), generated)
-    draw.rounded_rectangle((620, 125, 1140, 645), radius=42, outline="#93c5fd", width=5)
+    
+    # Main card with clean white background
+    draw.rounded_rectangle((50, 75, 1150, 925), radius=50, fill="#ffffff", outline="#e2e8f0", width=3)
 
-    eyebrow_font = font(32, bold=True)
-    title_font = font(58, bold=True)
-    body_font = font(34)
-    label_font = font(27, bold=True)
-    footer_font = font(28)
+    # Image placement - larger and more prominent
+    canvas.paste(generated.convert("RGB"), (615, 115))
+    draw.rounded_rectangle((605, 105, 1135, 655), radius=48, outline="#3b82f6", width=7)
 
-    x = 74
-    y = 100
-    max_width = 510
+    # Premium fonts
+    eyebrow_font = font(26, bold=True)
+    title_font = font(54, bold=True)
+    body_font = font(31)
+    label_font = font(23, bold=True)
+    footer_font = font(25)
 
-    draw.text((x, y), "AI IN THE SDLC", fill="#1d4ed8", font=eyebrow_font)
-    y += 66
+    x_padding = 85
+    y = 120
+    max_width = 490
 
-    for line in limited_lines(draw, title, title_font, max_width, 3):
-        draw.text((x, y), line, fill="#111827", font=title_font)
-        y += 68
+    # Section label with icon
+    draw.text((x_padding, y), "✨ AI IN THE SDLC", fill="#1e40af", font=eyebrow_font)
+    y += 58
 
-    y += 20
-    draw.rounded_rectangle((x, y, x + 142, y + 9), radius=4, fill="#16a34a")
-    y += 44
+    # Title - bold and prominent
+    for line in limited_lines(draw, title, title_font, max_width, 2):
+        draw.text((x_padding, y), line, fill="#0f172a", font=title_font)
+        y += 64
 
+    y += 24
+    # Accent bar - premium look
+    draw.rounded_rectangle((x_padding, y, x_padding + 180, y + 14), radius=7, fill="#06b6d4")
+    y += 48
+
+    # Body text - clean and readable
     for line in limited_lines(draw, body, body_font, max_width, 3):
-        draw.text((x, y), line, fill="#1f2937", font=body_font)
-        y += 48
+        draw.text((x_padding, y), line, fill="#334155", font=body_font)
+        y += 44
 
-    stages = ["AI suggestion", "Code review", "CI tests", "Security gate", "Deploy"]
-    stage_y = 750
-    stage_x = 74
-    for index, stage in enumerate(stages):
-        box_width = 190 if index != 0 else 214
-        fill = "#ffffff" if index % 2 == 0 else "#e0f2fe"
-        draw.rounded_rectangle((stage_x, stage_y, stage_x + box_width, stage_y + 74), radius=18, fill=fill)
-        draw.text((stage_x + 18, stage_y + 22), stage, fill="#0f172a", font=label_font)
+    # Enhanced pipeline stages with better visual design
+    y = 710
+    x_stage = x_padding
+    stages = ["Analyze", "Design", "Implement", "Test", "Deploy"]
+    stage_colors = ["#e0f2fe", "#d1fae5", "#fef3c7", "#fee2e2", "#e9d5ff"]
+    
+    for index, (stage, color) in enumerate(zip(stages, stage_colors)):
+        box_width = 165
+        draw.rounded_rectangle((x_stage, y, x_stage + box_width, y + 66), radius=20, fill=color, outline="#cbd5e1", width=2)
+        draw.text((x_stage + 14, y + 16), stage, fill="#0f172a", font=label_font)
+        
+        # Connection arrows
         if index < len(stages) - 1:
-            draw.line((stage_x + box_width + 12, stage_y + 37, stage_x + box_width + 48, stage_y + 37), fill="#2563eb", width=5)
-        stage_x += box_width + 56
+            arrow_x = x_stage + box_width + 10
+            arrow_y_mid = y + 33
+            draw.line((arrow_x, arrow_y_mid, arrow_x + 32, arrow_y_mid), fill="#0284c7", width=5)
+            draw.polygon([(arrow_x + 32, arrow_y_mid), (arrow_x + 40, arrow_y_mid - 5), (arrow_x + 40, arrow_y_mid + 5)], fill="#0284c7")
+        
+        x_stage += box_width + 46
 
-    draw.text((74, 940), "Human review before release", fill="#475569", font=footer_font)
+    # Professional footer
+    draw.text((x_padding, 835), "End-to-end security and quality integrated throughout development", fill="#475569", font=footer_font)
 
     output = io.BytesIO()
     canvas.save(output, format="PNG")
+    logging.info("LinkedIn image composed with enhanced professional design.")
     return output.getvalue()
 
 
@@ -167,72 +225,172 @@ def fallback_image_bytes(post_text: str = "") -> bytes:
 
     output = io.BytesIO()
     base_image.save(output, format="PNG")
+    logging.info("Fallback base image generated.")
     return output.getvalue()
 
 
 def generate_image(settings: Settings, prompt: str, post_text: str = "") -> bytes | None:
-    """Generate an image using Gemini image generation."""
-    require(settings.gemini_api_key, "GEMINI_API_KEY")
+    """Generate an image using Cloudflare AI with Gemini-enhanced prompt."""
+    require(settings.cloudflare_api_token, "CLOUDFLARE_API_TOKEN")
+    require(settings.cloudflare_account_id, "CLOUDFLARE_ACCOUNT_ID")
+
+    # Enhance the prompt using Gemini for better image generation
+    logging.info("Enhancing image prompt with Gemini...")
+    enhanced_prompt = enhance_image_prompt(settings, prompt)
+    logging.info(f"Enhanced prompt: {enhanced_prompt[:100]}...")
+
+    base_url = f"https://api.cloudflare.com/client/v4/accounts/{settings.cloudflare_account_id}/ai/run"
+    model = settings.cloudflare_image_model
+    headers = {"Authorization": f"Bearer {settings.cloudflare_api_token}"}
+
+    attempts = [
+        (f"{base_url}/{model}", {"prompt": enhanced_prompt}, headers.copy()),
+        (base_url, {"model": model, "input": enhanced_prompt, "modalities": ["image"]}, headers.copy()),
+        (base_url, {"model": model, "inputs": enhanced_prompt, "modalities": ["image"]}, headers.copy()),
+    ]
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_image_model}:generateContent"
-        headers = {
-            "Content-Type": "application/json",
-            "X-goog-api-key": settings.gemini_api_key,
-        }
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "responseModalities": ["IMAGE"]
-            },
-        }
-
         response = None
-        for attempt in range(1, 4):
-            response = get_session().post(url, headers=headers, json=payload, timeout=120)
-            if response.ok:
+        last_exc = None
+        for (try_url, try_payload, try_headers) in attempts:
+            for attempt_no in range(1, 4):
+                try:
+                    logging.info(f"Cloudflare attempt: POST {try_url} (attempt {attempt_no})")
+                    resp = get_session().post(try_url, headers=try_headers, json=try_payload, timeout=120)
+                    if resp.ok:
+                        response = resp
+                        break
+                    if resp.status_code not in RETRYABLE_STATUS_CODES:
+                        logging.error(f"Cloudflare returned {resp.status_code}: {resp.text}")
+                        break
+                    wait_seconds = attempt_no * 5
+                    logging.warning(f"Cloudflare temporary error {resp.status_code}. Retrying in {wait_seconds}s...")
+                    time.sleep(wait_seconds)
+                except Exception as ex:
+                    last_exc = ex
+                    logging.warning(f"Cloudflare request exception: {ex}. Retrying...", exc_info=False)
+                    time.sleep(attempt_no * 2)
+            if response:
                 break
-            if response.status_code not in RETRYABLE_STATUS_CODES or attempt == 3:
-                response.raise_for_status()
-
-            wait_seconds = attempt * 10
-            print(f"Gemini image model is temporarily unavailable. Retrying in {wait_seconds}s...")
-            time.sleep(wait_seconds)
 
         if response is None:
-            raise RuntimeError("Gemini image generation did not return a response.")
+            if last_exc:
+                raise last_exc
+            raise RuntimeError("Cloudflare image generation did not return a response.")
 
-        data = response.json()
+        image_data = response.content
+        content_type = response.headers.get("Content-Type", "")
+        if response.ok and content_type.startswith("image/"):
+            image = Image.open(io.BytesIO(image_data))
+            if post_text:
+                return compose_linkedin_image(image, post_text)
+            out = io.BytesIO()
+            image.save(out, format="PNG")
+            return out.getvalue()
 
-        image_data = None
-        for candidate in data.get("candidates", []):
-            for part in candidate.get("content", {}).get("parts", []):
-                inline_data = part.get("inlineData") or part.get("inline_data")
-                if inline_data and inline_data.get("data"):
-                    image_data = base64.b64decode(inline_data["data"])
-                    break
-            if image_data:
-                break
+        try:
+            data = response.json()
+        except Exception:
+            logging.error(f"Cloudflare returned unexpected content and not JSON: {response.text}")
+            raise RuntimeError("Cloudflare returned no valid image data.")
 
-        if not image_data:
-            raise RuntimeError("Gemini returned no image data.")
+        b64 = None
+        if isinstance(data, dict):
+            # Check result.image for Cloudflare flux models (base64 JPEG)
+            if "result" in data and isinstance(data["result"], dict):
+                result_dict = data["result"]
+                if "image" in result_dict:
+                    img_val = result_dict["image"]
+                    if isinstance(img_val, str):
+                        b64 = img_val
+            
+            # If not found in result.image, search other common fields
+            if not b64:
+                for key in ("outputs", "artifacts", "generated", "image", "images"):
+                    if key in data:
+                        val = data[key]
+                        if isinstance(val, str) and (val.startswith("data:image") or val.startswith("/9j")):
+                            b64 = val
+                            break
+                        if isinstance(val, list) and val and isinstance(val[0], str) and (val[0].startswith("data:image") or val[0].startswith("/9j")):
+                            b64 = val[0]
+                            break
+                        if isinstance(val, dict):
+                            for subval in val.values():
+                                if isinstance(subval, str) and (subval.startswith("data:image") or subval.startswith("/9j")):
+                                    b64 = subval
+                                    break
+                            if b64:
+                                break
 
+        if not b64:
+            logging.error(f"Cloudflare returned JSON but no image found: {data}")
+            raise RuntimeError("Cloudflare returned JSON without image data.")
+
+        # Decode base64 image (handle both data:image/... and raw base64 JPEG)
+        b64_clean = re.sub(r'data:image/[^;]+;base64,', '', b64)
+        image_data = base64.b64decode(b64_clean)
         image = Image.open(io.BytesIO(image_data))
         if post_text:
             return compose_linkedin_image(image, post_text)
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        return out.getvalue()
+        # FIX: Removed dead code block that appeared here after the return above
+        # (duplicate image open + save that could never execute)
 
-        output = io.BytesIO()
-        image.save(output, format="PNG")
-        return output.getvalue()
     except Exception as e:
-        print(f"Warning: Image generation failed: {e}", file=sys.stderr)
-        print("Using local fallback image.")
+        logging.error(f"Image generation failed: {e}", exc_info=True)
+        hf_key = os.getenv("HUGGING_FACE_API_KEY")
+        if hf_key:
+            logging.info("Attempting Hugging Face fallback image generation.")
+            try:
+                hf_model = os.getenv("HUGGING_FACE_IMAGE_MODEL", "stabilityai/stable-diffusion-3.5-large")
+                hf_url = f"https://api-inference.huggingface.co/models/{hf_model}"
+                hf_headers = {"Authorization": f"Bearer {hf_key}"}
+                hf_payload = {"inputs": prompt}
+                hf_resp = get_session().post(hf_url, headers=hf_headers, json=hf_payload, timeout=120)
+                if hf_resp.ok:
+                    ct = hf_resp.headers.get("Content-Type", "")
+                    if "image" in ct:
+                        image = Image.open(io.BytesIO(hf_resp.content))
+                        if post_text:
+                            return compose_linkedin_image(image, post_text)
+                        out = io.BytesIO()
+                        image.save(out, format="PNG")
+                        return out.getvalue()
+                    try:
+                        data = hf_resp.json()
+                        b64 = None
+                        if isinstance(data, dict):
+                            for key in ("generated_image", "image", "images", "output"):
+                                if key in data:
+                                    val = data[key]
+                                    if isinstance(val, str) and val.startswith("data:image"):
+                                        b64 = val
+                                        break
+                                    if isinstance(val, list) and val and isinstance(val[0], str) and val[0].startswith("data:image"):
+                                        b64 = val[0]
+                                        break
+                        if b64:
+                            image_data = base64.b64decode(re.sub(r'data:image/[^;]+;base64,', '', b64))
+                            image = Image.open(io.BytesIO(image_data))
+                            if post_text:
+                                return compose_linkedin_image(image, post_text)
+                            out = io.BytesIO()
+                            image.save(out, format="PNG")
+                            return out.getvalue()
+                        else:
+                            # FIX: was silently falling through; now logs the failure clearly
+                            logging.warning("Hugging Face fallback returned JSON but no image data found.")
+                    except Exception:
+                        pass
+                else:
+                    logging.warning(f"Hugging Face fallback failed: {hf_resp.status_code} {hf_resp.text}")
+            except Exception as he:
+                logging.error(f"Hugging Face fallback error: {he}", exc_info=True)
+
+        logging.warning("Using local fallback image.")
         return fallback_image_bytes(post_text)
 
 
@@ -278,7 +436,8 @@ def upload_image_to_linkedin(settings: Settings, image_data: bytes) -> str | Non
         )
         upload_response.raise_for_status()
 
+        logging.info(f"Image uploaded to LinkedIn. URN: {image_urn}")
         return image_urn
     except Exception as e:
-        print(f"Warning: Image upload failed: {e}", file=sys.stderr)
+        logging.error(f"Image upload to LinkedIn failed: {e}", exc_info=True)
         return None

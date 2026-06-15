@@ -1,6 +1,7 @@
 import argparse
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+import logging
 
 from src.linkedin_post.content import (
     AllRowsPostedError,
@@ -19,62 +20,75 @@ from src.linkedin_post.utils import parse_date
 class ImagePreparationError(Exception):
     """Raised when image generation or upload prevents publishing."""
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+def _get_content_source(settings):
+    """Helper to get the next content row if a source URL is configured."""
+    if settings.content_source_url and "PASTE_" not in settings.content_source_url:
+        return next_content_row(settings)
+    return None, ""
+
 
 def preview(settings):
-    source = None
-    if settings.content_source_url and "PASTE_" not in settings.content_source_url:
-        source, _ = next_content_row(settings)
-        print(f"Source title: {source['title']}")
+    """Generates and prints a preview of the post and image prompt."""
+    source, _ = _get_content_source(settings)
+    if source:
+        logging.info(f"Source title: {source['title']}")
 
     text, image_prompt = generate_post(settings, source)
-    print("--- POST PREVIEW ---")
-    print(text)
-    print("\n--- IMAGE PROMPT PREVIEW ---")
-    print(image_prompt)
+    logging.info("--- POST PREVIEW ---")
+    logging.info(text)
+    logging.info("\n--- IMAGE PROMPT PREVIEW ---")
+    logging.info(image_prompt)
 
 
 def prepare_image(settings, image_prompt, post_text, require_image=None):
     require_image = settings.post_require_image if require_image is None else require_image
 
-    if not settings.gemini_api_key:
+    if not settings.cloudflare_api_token or not settings.cloudflare_account_id:
         if require_image:
-            raise ImagePreparationError("Image generation is required before publishing. Missing GEMINI_API_KEY.")
-        print("Image generation skipped. Missing GEMINI_API_KEY; publishing text-only.")
+            logging.error("Image generation is required before publishing. Missing Cloudflare AI credentials.")
+            raise ImagePreparationError("Image generation is required before publishing. Missing Cloudflare AI credentials.")
+        logging.warning("Image generation skipped. Missing Cloudflare AI credentials; publishing text-only.")
         return None
 
     image_data = generate_image(settings, image_prompt, post_text)
     if not image_data:
         if require_image:
+            logging.error("Image generation failed. Nothing was published.")
             raise ImagePreparationError("Image generation failed. Nothing was published.")
-        print("Image generation failed. Publishing text-only.")
+        logging.warning("Image generation failed. Publishing text-only.")
         return None
 
     image_urn = upload_image_to_linkedin(settings, image_data)
     if not image_urn:
         if require_image:
+            logging.error("Image upload to LinkedIn failed. Nothing was published.")
             raise ImagePreparationError("Image upload to LinkedIn failed. Nothing was published.")
-        print("Image upload to LinkedIn failed. Publishing text-only.")
+        logging.warning("Image upload to LinkedIn failed. Publishing text-only.")
         return None
 
     return image_urn
 
 
 def test_image(settings):
-    source = None
-    if settings.content_source_url and "PASTE_" not in settings.content_source_url:
-        source, _ = next_content_row(settings)
+    """Generates and uploads an image to LinkedIn for testing purposes."""
+    source, _ = _get_content_source(settings)
 
     text, image_prompt = generate_post(settings, source)
     image_urn = prepare_image(settings, image_prompt, text, require_image=True)
-    print("Image generation and LinkedIn upload test passed.")
-    print(f"Image URN: {image_urn}")
+    if image_urn:
+        logging.info("Image generation and LinkedIn upload test passed.")
+        logging.info(f"Image URN: {image_urn}")
+    else:
+        logging.error("Image generation and LinkedIn upload test failed.")
 
 
 def post(settings):
-    source = None
-    source_key = ""
-    if settings.content_source_url and "PASTE_" not in settings.content_source_url:
-        source, source_key = next_content_row(settings)
+    """Generates and publishes a post to LinkedIn."""
+    source, source_key = _get_content_source(settings)
 
     text, image_prompt = generate_post(settings, source)
     image_urn = prepare_image(settings, image_prompt, text)
@@ -83,28 +97,30 @@ def post(settings):
     if source_key:
         mark_posted(settings, source_key)
 
-    print(text)
-    print()
-    print(f"Published to LinkedIn. Status: {result['status_code']}. Post ID: {result.get('post_id')}")
+    logging.info(text)
+    logging.info(f"Published to LinkedIn. Status: {result['status_code']}. Post ID: {result.get('post_id')}")
 
 
 def scheduled_post(settings):
+    """Posts only when the configured interval has passed since the last successful post."""
     today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     state = load_scheduler_state(settings)
     last_posted_on = parse_date(state.get("last_posted_on", ""))
 
     if last_posted_on and (today - last_posted_on).days < settings.post_interval_days:
-        print(f"Skipping. Last successful post was on {last_posted_on.isoformat()}.")
+        logging.info(f"Skipping scheduled post. Last successful post was on {last_posted_on.isoformat()}.")
         return
 
     try:
         post(settings)
     except AllRowsPostedError as exc:
-        print(f"Skipping. {exc}")
+        logging.info(f"Skipping scheduled post: {exc}")
         return
     except ImagePreparationError as exc:
-        print(f"Skipping. {exc}")
+        logging.error(f"Skipping scheduled post due to image preparation error: {exc}")
         return
+    except Exception as exc:
+        logging.critical(f"An unexpected error occurred during scheduled post: {exc}", exc_info=True)
 
     state["last_posted_on"] = today.isoformat()
     save_scheduler_state(settings, state)
@@ -127,13 +143,13 @@ def main():
 
     try:
         if args.command == "auth-url":
-            print(build_auth_url(settings))
+            logging.info(build_auth_url(settings))
         elif args.command == "login":
             login(settings)
         elif args.command == "exchange":
             access_token, person_urn = exchange_code_for_token(settings, args.callback_url)
-            print(f"LINKEDIN_ACCESS_TOKEN={access_token}")
-            print(f"LINKEDIN_PERSON_URN={person_urn}")
+            logging.info(f"LINKEDIN_ACCESS_TOKEN={access_token}")
+            logging.info(f"LINKEDIN_PERSON_URN={person_urn}")
         elif args.command == "preview":
             preview(settings)
         elif args.command == "test-image":
@@ -142,8 +158,9 @@ def main():
             post(settings)
         elif args.command == "scheduled-post":
             scheduled_post(settings)
-    except ImagePreparationError as exc:
-        raise SystemExit(str(exc)) from exc
+    except Exception as exc:
+        logging.critical(f"An error occurred during command '{args.command}': {exc}", exc_info=True)
+        sys.exit(1) # Exit with a non-zero status code to indicate failure
 
 
 if __name__ == "__main__":

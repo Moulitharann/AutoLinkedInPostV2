@@ -181,3 +181,77 @@ Constraint: Post text must be under 900 characters. No hype, fluff, or generic m
         return post_text, image_prompt
 
     raise SystemExit("Unexpected Gemini response format.")
+
+
+def enhance_image_prompt(settings: Settings, base_prompt: str) -> str:
+    """Use Gemini to generate a detailed, vivid image prompt for Cloudflare image generation."""
+    require(settings.gemini_api_key, "GEMINI_API_KEY")
+
+    enhancement_prompt = f"""You are an expert at writing detailed, vivid image prompts for AI image generators.
+Given this base image prompt, create a highly detailed and descriptive prompt optimized for the Flux-1 image model.
+Include specific details about style, lighting, composition, colors, mood, and technical aspects.
+Keep it under 300 words and make it compelling for image generation.
+
+Base prompt: {base_prompt}
+
+Return ONLY the enhanced prompt, no explanations."""
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": settings.gemini_api_key,
+    }
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": enhancement_prompt.strip()}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.8,
+            "maxOutputTokens": 512,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            },
+        }
+    }
+
+    models = [settings.gemini_model]
+    if settings.gemini_model != TEXT_MODEL_FALLBACK:
+        models.append(TEXT_MODEL_FALLBACK)
+
+    last_error = ""
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(1, 3):  # Fewer retries for enhancement
+            try:
+                response = get_session().post(url, headers=headers, json=payload, timeout=30)
+                if response.ok:
+                    candidate = response.json().get("candidates", [{}])[0]
+                    content = candidate.get("content", {})
+                    parts = content.get("parts", [])
+                    if parts and isinstance(parts, list):
+                        enhanced = "".join([str(part.get("text", "")) for part in parts]).strip()
+                        if enhanced:
+                            return enhanced
+                
+                try:
+                    error_message = response.json().get("error", {}).get("message", response.text)
+                except ValueError:
+                    error_message = response.text
+                
+                last_error = f"Gemini enhancement failed ({response.status_code}): {error_message}"
+                if response.status_code not in RETRYABLE_STATUS_CODES:
+                    break
+                
+                if attempt < 2:
+                    time.sleep(attempt * 3)
+            except Exception as e:
+                last_error = str(e)
+                break
+    
+    # If enhancement fails, return base prompt unchanged
+    import logging
+    logging.warning(f"Image prompt enhancement failed: {last_error}. Using base prompt.")
+    return base_prompt

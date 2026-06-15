@@ -9,6 +9,9 @@ class Settings:
     gemini_api_key: str
     gemini_model: str
     gemini_image_model: str
+    cloudflare_api_token: str
+    cloudflare_account_id: str
+    cloudflare_image_model: str
     linkedin_client_id: str
     linkedin_client_secret: str
     linkedin_redirect_uri: str
@@ -33,6 +36,9 @@ def load_settings() -> Settings:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         gemini_image_model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
+        cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN", ""),
+        cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID", ""),
+        cloudflare_image_model=os.getenv("CLOUDFLARE_IMAGE_MODEL", "@cf/stabilityai/stable-diffusion-xl-lightning"),
         linkedin_client_id=os.getenv("LINKEDIN_CLIENT_ID", ""),
         linkedin_client_secret=os.getenv("LINKEDIN_CLIENT_SECRET", ""),
         linkedin_redirect_uri=os.getenv("LINKEDIN_REDIRECT_URI", "http://localhost:8000/callback"),

@@ -37,6 +37,9 @@
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-2.5-flash
           GEMINI_IMAGE_MODEL: gemini-2.5-flash-image
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_IMAGE_MODEL: "@cf/black-forest-labs/flux-1-schnell"
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           LINKEDIN_REDIRECT_URI: http://localhost:8000/callback
@@ -52,7 +55,7 @@
           POST_TONE: clear, practical, senior software engineer
           POST_AUDIENCE: software engineers and engineering leaders
           POST_VISIBILITY: PUBLIC
-          POST_REQUIRE_IMAGE: "false"
+          POST_REQUIRE_IMAGE: "true"
         run: python -m src.main scheduled-post
 
       - name: Save posting state

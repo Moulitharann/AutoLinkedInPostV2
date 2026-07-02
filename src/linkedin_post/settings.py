@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -30,8 +31,16 @@ class Settings:
     post_require_image: bool
 
 
+def _resolve_path(value: str, root: Path) -> str:
+    if not value:
+        return value
+    path = Path(value).expanduser()
+    return str(path if path.is_absolute() else root / path)
+
+
 def load_settings() -> Settings:
-    load_dotenv()
+    project_root = Path(__file__).resolve().parent.parent.parent
+    load_dotenv(project_root / ".env")
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
@@ -47,8 +56,8 @@ def load_settings() -> Settings:
         linkedin_person_urn=os.getenv("LINKEDIN_PERSON_URN", ""),
         content_source_url=os.getenv("CONTENT_SOURCE_URL", ""),
         content_source_type=os.getenv("CONTENT_SOURCE_TYPE", "auto").lower(),
-        post_history_file=os.getenv("POST_HISTORY_FILE", "posts_history.json"),
-        scheduler_state_file=os.getenv("SCHEDULER_STATE_FILE", "scheduler_state.json"),
+        post_history_file=_resolve_path(os.getenv("POST_HISTORY_FILE", "posts_history.json"), project_root),
+        scheduler_state_file=_resolve_path(os.getenv("SCHEDULER_STATE_FILE", "scheduler_state.json"), project_root),
         post_interval_days=int(os.getenv("POST_INTERVAL_DAYS", "2")),
         post_topic=os.getenv("POST_TOPIC", "software engineering"),
         post_tone=os.getenv("POST_TONE", "clear, practical, senior software engineer"),

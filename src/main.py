@@ -1,5 +1,5 @@
 import argparse
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 import logging
 
@@ -108,7 +108,14 @@ def scheduled_post(settings):
     last_posted_on = parse_date(state.get("last_posted_on", ""))
 
     if last_posted_on and (today - last_posted_on).days < settings.post_interval_days:
-        logging.info(f"Skipping scheduled post. Last successful post was on {last_posted_on.isoformat()}.")
+        next_allowed_on = last_posted_on + timedelta(days=settings.post_interval_days)
+        logging.info(
+            "Skipping scheduled post. Last successful post was on %s. "
+            "Configured interval is %s days; next post is allowed on %s.",
+            last_posted_on.isoformat(),
+            settings.post_interval_days,
+            next_allowed_on.isoformat(),
+        )
         return
 
     try:
